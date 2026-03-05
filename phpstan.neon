@@ -1,0 +1,16 @@
+includes:
+    - ./vendor/nunomaduro/larastan/extension.neon
+
+parameters:
+    # O nível varia de 0 (básico) a 9 (mais rigoroso)
+    # Comece com 5 e suba conforme for corrigindo os erros
+    level: 5
+
+    paths:
+        - app
+        - database
+        - routes
+
+    # Ignorar arquivos gerados ou pastas externas
+    excludePaths:
+        - ./*/*/FileToBeExcluded.php

@@ -12,7 +12,13 @@ function App() {
 
     useEffect(() => {
         globalThis.axios.get('/api/user')
-            .then(res => setUser(res.data))
+            .then(res => {
+                if (res.data.role === 'admin') {
+                    window.location.href = '/admin';
+                } else {
+                    setUser(res.data);
+                }
+            })
             .catch(() => { }) // not logged in
             .finally(() => setChecking(false));
     }, []);

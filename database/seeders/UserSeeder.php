@@ -19,15 +19,18 @@ class UserSeeder extends Seeder
             'password' => Hash::make('password'),
             'energy_points' => 100,
             'level' => 1,
+            'reputation_score' => 150,
             'cpu' => 800,
             'ram' => 512,
             'ssd' => 100,
             'role' => 'player',
+            'is_npc' => false,
             'stats' => [
                 'xp' => 0,
                 'credits' => 150,
             ],
             'last_energy_update' => now(),
+            'last_seen_ip' => '127.0.0.1',
         ]);
 
         // Second Operator (for testing)
@@ -36,32 +39,35 @@ class UserSeeder extends Seeder
             'password' => Hash::make('password'),
             'energy_points' => 100,
             'level' => 2,
+            'reputation_score' => 450,
             'cpu' => 1000,
             'ram' => 1024,
             'ssd' => 95,
             'role' => 'player',
+            'is_npc' => false,
             'stats' => [
                 'xp' => 1200,
                 'credits' => 300,
             ],
             'last_energy_update' => now(),
+            'last_seen_ip' => '192.168.1.15',
         ]);
 
-        // Administrator
+        // Administrator (NOT a player)
         User::create([
             'username' => 'wheelkorner@gmail.com',
             'password' => Hash::make('354354**'),
             'energy_points' => 1000,
-            'level' => 99,
-            'cpu' => 5000,
-            'ram' => 16384,
+            'level' => 999,
+            'reputation_score' => 999999,
+            'cpu' => 10000,
+            'ram' => 32768,
             'ssd' => 100,
             'role' => 'admin',
-            'stats' => [
-                'xp' => 99999,
-                'credits' => 999999,
-            ],
+            'is_npc' => false,
+            'stats' => [], // Empty stats for admin
             'last_energy_update' => now(),
+            'last_seen_ip' => '10.0.0.1',
         ]);
     }
 }

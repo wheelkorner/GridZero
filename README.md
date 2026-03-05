@@ -52,6 +52,8 @@ docker exec -it <nome_do_container_app> php artisan migrate
 ### 5. Inicie o worker de fila (essencial para as ações):
 ```bash
 docker exec -it <nome_do_container_app> php artisan queue:work
+
+php artisan queue:work --verbose
 ```
 
 ## 🏗️ Arquitetura e Design Patterns
@@ -61,3 +63,11 @@ O projeto utiliza o **Service Pattern** (`ActionService`) para isolar as regras 
 ## 🤝 Contribuição
 
 Contribuições são bem-vindas! Sinta-se à vontade para abrir Issues para sugestões ou Pull Requests com melhorias.
+
+
+
+## Logs
+
+```bash
+/vendor/bin/phpstan analyse
+``` 

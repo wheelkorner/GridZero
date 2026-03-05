@@ -71,8 +71,8 @@ const StatsBar = ({ user }) => {
                 </div>
 
                 <div className="flex flex-col items-end">
-                    <span className="text-[9px] opacity-50 uppercase tracking-tighter">Credits</span>
-                    <span className="text-white font-bold text-xs">{user.stats?.credits || 0} CR</span>
+                    <span className="text-[9px] opacity-50 uppercase tracking-tighter">GZC Wallet</span>
+                    <span className="text-yellow-400 font-bold text-xs">◈ {Math.floor(user.stats?.credits || 0).toLocaleString()} GZC</span>
                 </div>
             </div>
         </header>

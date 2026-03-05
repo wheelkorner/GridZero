@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 
-const Console = ({ logs, onCommand }) => {
+const Console = ({ logs, onCommand, candidates, cwd }) => {
     const [input, setInput] = useState('');
     const [history, setHistory] = useState([]);
     const [historyIndex, setHistoryIndex] = useState(-1);
@@ -22,9 +22,52 @@ const Console = ({ logs, onCommand }) => {
         }
     };
 
+    const [completions, setCompletions] = useState([]);
+    const [completionIndex, setCompletionIndex] = useState(-1);
+    const [originalLine, setOriginalLine] = useState('');
+
     const handleKeyDown = (e) => {
-        if (e.key === 'ArrowUp') {
+        if (e.key === 'Tab') {
             e.preventDefault();
+
+            const words = input.split(/\s+/);
+            const lastWord = words[words.length - 1];
+
+            // If we are already cycling, just go to next
+            if (completions.length > 0 && input.endsWith(completions[completionIndex])) {
+                const nextIdx = (completionIndex + 1) % completions.length;
+                const newWords = [...originalLine.split(/\s+/)];
+                newWords[newWords.length - 1] = completions[nextIdx];
+                setInput(newWords.join(' '));
+                setCompletionIndex(nextIdx);
+                return;
+            }
+
+            // Start new completion cycle
+            let candidatesList = [];
+            if (words.length === 1) {
+                // Command completion
+                candidatesList = candidates.system.filter(c => c.startsWith(lastWord));
+            } else if (words.length === 2 && words[0] === 'sudo') {
+                // Sudo subcommand completion
+                candidatesList = candidates.admin.filter(c => c.startsWith(lastWord));
+            } else {
+                // File completion
+                candidatesList = candidates.files.filter(f => f.startsWith(lastWord));
+            }
+
+            if (candidatesList.length > 0) {
+                setCompletions(candidatesList);
+                setCompletionIndex(0);
+                setOriginalLine(input);
+
+                const newWords = [...words];
+                newWords[newWords.length - 1] = candidatesList[0];
+                setInput(newWords.join(' '));
+            }
+        } else if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            setCompletions([]);
             if (historyIndex < history.length - 1) {
                 const newIndex = historyIndex + 1;
                 setHistoryIndex(newIndex);
@@ -32,6 +75,7 @@ const Console = ({ logs, onCommand }) => {
             }
         } else if (e.key === 'ArrowDown') {
             e.preventDefault();
+            setCompletions([]);
             if (historyIndex > 0) {
                 const newIndex = historyIndex - 1;
                 setHistoryIndex(newIndex);
@@ -40,6 +84,9 @@ const Console = ({ logs, onCommand }) => {
                 setHistoryIndex(-1);
                 setInput('');
             }
+        } else {
+            // Any other key clears the completion state
+            if (completions.length > 0) setCompletions([]);
         }
     };
 
@@ -52,7 +99,7 @@ const Console = ({ logs, onCommand }) => {
                 {logs.map((log) => (
                     <div key={log.id} className={`mb-2 ${log.type === 'system' ? 'text-blue-400' : log.type === 'error' ? 'text-red-500' : ''}`}>
                         <span className="mr-2 font-bold">
-                            {log.type === 'command' ? 'operator@gridzero:~$ ' : ':: '}
+                            {log.type === 'command' ? `operator@gridzero:${log.metadata?.cwd || '~'}$ ` : ':: '}
                         </span>
                         <span className={log.id === logs[logs.length - 1].id ? 'typewriter-effect' : ''}>
                             {log.text}
@@ -62,7 +109,7 @@ const Console = ({ logs, onCommand }) => {
             </div>
 
             <form onSubmit={handleSubmit} className="flex border-t border-neon-green/30 pt-4">
-                <span className="mr-2 font-bold text-neon-green whitespace-nowrap">operator@gridzero:~$</span>
+                <span className="mr-2 font-bold text-neon-green whitespace-nowrap">operator@gridzero:{cwd}$</span>
                 <input
                     type="text"
                     value={input}

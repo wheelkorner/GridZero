@@ -1,8 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import StatsBar from './StatsBar';
 import Console from './Console';
 import RemoteTerminal from './RemoteTerminal';
 import TextEditor from './TextEditor';
+import NpcAttackOverlay from './NpcAttackOverlay';
 
 // Default Local VFS Structure (Same as before)
 const DEFAULT_LOCAL_VFS = {
@@ -51,16 +52,22 @@ const Dashboard = ({ user, setUser, onLogout }) => {
 
     const [remoteLogs, setRemoteLogs] = useState([]);
     const [remoteCwd, setRemoteCwd] = useState('/');
+    const [remoteVfs, setRemoteVfs] = useState(null);
+    const [remoteHost, setRemoteHost] = useState(null);
+    const [sessionTimeLeft, setSessionTimeLeft] = useState(null);
+    const sessionTimerRef = useRef(null);
     const [localCwd, setLocalCwd] = useState('/home/operator');
-
     const [activeFile, setActiveFile] = useState(null);
+    const [npcAttack, setNpcAttack] = useState(null); // { attacker, files }
+    const [attackNotif, setAttackNotif] = useState(null); // { xpLost, file }
+    const attackedRef = useRef(false); // prevent duplicate attacks in same vulnerability window
 
-    const addLog = (text, type = "normal") => {
-        setLogs(prev => [...prev.slice(-100), { id: Date.now() + Math.random(), text, type }]);
+    const addLog = (text, type = "normal", metadata = {}) => {
+        setLogs(prev => [...prev.slice(-100), { id: Date.now() + Math.random(), text, type, metadata }]);
     };
 
-    const addRemoteLog = (text, type = "normal") => {
-        setRemoteLogs(prev => [...prev.slice(-20), { text, type }]);
+    const addRemoteLog = (text, type = "normal", metadata = {}) => {
+        setRemoteLogs(prev => [...prev.slice(-20), { text, type, metadata }]);
     };
 
     const getLocalVFS = () => {
@@ -77,7 +84,7 @@ const Dashboard = ({ user, setUser, onLogout }) => {
         }
     };
 
-    // Online Status and Refresh logic
+    // Online Status and Refresh logic + NPC attack trigger
     useEffect(() => {
         let timer;
         const refreshUser = async () => {
@@ -94,28 +101,68 @@ const Dashboard = ({ user, setUser, onLogout }) => {
                     const progress = Math.min(100, Math.max(0, (elapsed / total) * 100));
 
                     if (progress >= 100) {
-                        addLog("SISTEMA: AÇÃO CONCLUÍDA. CONEXÃO REMOTA ENCERRADA.", "system");
+                        // Clear pending_action from state immediately so this only fires once
+                        setUser(prev => ({ ...prev, pending_action: null }));
                         setRemoteLogs([]);
                         setRemoteCwd('/');
+                        addLog("SISTEMA: AÇÃO CONCLUÍDA. CONEXÃO REMOTA ENCERRADA.", "system");
                     }
                 }
+
+                // NPC attack trigger: if player is vulnerable, maybe an NPC exploits it
+                const vulnUntil = res.data.vulnerable_until ? new Date(res.data.vulnerable_until) : null;
+                const isVulnerable = vulnUntil && vulnUntil > new Date();
+
+                if (isVulnerable && !attackedRef.current && !npcAttack) {
+                    const roll = Math.random();
+                    if (roll < 0.45) { // 45% chance per refresh tick
+                        attackedRef.current = true;
+
+                        // Firewall check — intercepts the attack and consumes the flag
+                        if (res.data.stats?.firewall_active) {
+                            addLog('[FIREWALL-X] ATAQUE NPC INTERCEPTADO E BLOQUEADO!', 'system');
+                            const cleanStats = { ...res.data.stats, firewall_active: false };
+                            globalThis.axios.post('/api/user/update-stats', { stats: cleanStats }).catch(() => { });
+                            setUser(prev => ({ ...prev, stats: cleanStats }));
+                        } else {
+                            // Pick a random NPC from scan
+                            try {
+                                const scanRes = await globalThis.axios.get('/api/scan');
+                                const npcs = scanRes.data.targets || [];
+                                const attacker = npcs.length > 0
+                                    ? npcs[Math.floor(Math.random() * npcs.length)]
+                                    : { hostname: 'GhostProtocol' };
+                                const localVFS = res.data.stats?.vfs || {};
+                                const rootFiles = localVFS['/home/operator']?.children || ['notes.txt'];
+                                setNpcAttack({ attacker: { username: attacker.hostname }, files: rootFiles });
+                            } catch {
+                                setNpcAttack({ attacker: { username: 'VoidGhost' }, files: ['notes.txt'] });
+                            }
+                        }
+                    }
+                }
+
+                // Reset attack guard when vulnerability window closes
+                if (!isVulnerable) {
+                    attackedRef.current = false;
+                }
+
             } catch (error) {
                 console.error("Online status update failed");
             }
         };
 
-        // Update last_seen_at and sync every 30s
         timer = setInterval(refreshUser, 30000);
-
         return () => clearInterval(timer);
-    }, [user.id]);
+    }, [user.id, npcAttack]);
 
     const processRemoteCommand = (input) => {
         const [cmd, ...args] = input.trim().split(/\s+/);
-        addRemoteLog(`remote@target:~$ ${input}`, "command");
+        addRemoteLog(input, "command", { cwd: remoteCwd });
 
+        // Use NPC VFS from server if we connected to an NPC via IP, otherwise fall back to VFS_DATA (Node VFS)
         const nodeId = user.pending_action?.node_id;
-        const vfs = VFS_DATA[nodeId] || VFS_DATA[1];
+        const vfs = remoteVfs || VFS_DATA[nodeId] || VFS_DATA[1];
 
         switch (cmd.toLowerCase()) {
             case 'ls': {
@@ -139,7 +186,7 @@ const Dashboard = ({ user, setUser, onLogout }) => {
                     parts.pop();
                     setRemoteCwd('/' + parts.join('/'));
                 } else {
-                    addRemoteLog(`cd: ${path}: No such directory`, "error");
+                    addRemoteLog(`cd: ${path}: No such directory`, "error", { cwd: remoteCwd });
                 }
                 break;
             }
@@ -174,12 +221,82 @@ const Dashboard = ({ user, setUser, onLogout }) => {
                 }
                 break;
             }
+            case 'cat': {
+                const file = args[0];
+                if (!file) { addRemoteLog('Usage: cat [file]', 'error'); break; }
+                const catPath = file.startsWith('/') ? file : (remoteCwd === '/' ? `/${file}` : `${remoteCwd}/${file}`);
+                if (vfs[catPath] && vfs[catPath].type === 'file') {
+                    vfs[catPath].content.split('\n').forEach(line => addRemoteLog(line));
+                } else {
+                    addRemoteLog(`cat: ${file}: No such file`, 'error');
+                }
+                break;
+            }
             case 'help':
-                addRemoteLog("AVAILABLE: ls, cd, cp [file], rm [file], help");
+                addRemoteLog("AVAILABLE: ls, cd, cat [file], cp [file], exit, help");
+                break;
+            case 'exit':
+                disconnectRemote(false);
                 break;
             default:
                 addRemoteLog(`command not found: ${cmd}`, "error");
         }
+    };
+
+    // ---- Clean/forced disconnect helpers --------------------------------
+    const stopSessionTimer = () => {
+        if (sessionTimerRef.current) {
+            clearInterval(sessionTimerRef.current);
+            sessionTimerRef.current = null;
+        }
+    };
+
+    const disconnectRemote = (retaliate = false) => {
+        stopSessionTimer();
+        setRemoteVfs(null);
+        setRemoteHost(null);
+        setRemoteLogs([]);
+        setRemoteCwd('/');
+        setSessionTimeLeft(null);
+        // Also clear node-based hack sessions
+        setUser(prev => ({ ...prev, pending_action: null }));
+
+        if (retaliate) {
+            // NPC counter-attack: drain energy and open attacker's vulnerability window
+            const dmg = Math.floor(Math.random() * 21) + 10; // 10-30 energy
+            addLog("[!] NPC CONTRA-ATAQUE INICIADO.", "error");
+            addLog(`[!] SISTEMA: PERDA DE ${dmg} PONTOS DE ENERGIA.`, "error");
+            addLog("[!] SUAS PORTAS ESTÃO ABERTAS POR 120 SEGUNDOS.", "error");
+            // Update server
+            globalThis.axios.post('/api/user/update-stats', {
+                stats: { ...user.stats, energy_drain: dmg }
+            }).catch(() => { });
+            // Also tell the server the attacker is now vulnerable for 2min
+            globalThis.axios.patch?.('/api/user/vulnerable', { seconds: 120 }).catch(() => { });
+            setUser(prev => ({ ...prev, energy_points: Math.max(0, (prev.energy_points || 100) - dmg) }));
+        } else {
+            addLog("SISTEMA: SESSÃO REMOTA ENCERRADA LIMPA.", "system");
+        }
+    };
+
+    // Start the 2-minute session countdown when connecting to an NPC
+    const startSessionTimer = (hostname) => {
+        const SESSION_SECONDS = 120;
+        setSessionTimeLeft(SESSION_SECONDS);
+        stopSessionTimer();
+
+        let remaining = SESSION_SECONDS;
+        sessionTimerRef.current = setInterval(() => {
+            remaining -= 1;
+            setSessionTimeLeft(remaining);
+            if (remaining <= 30 && remaining > 0 && remaining % 10 === 0) {
+                addRemoteLog(`[!] AVISO: ${remaining}s ATÉ EXPULSÃO DO SISTEMA.`, 'error');
+            }
+            if (remaining <= 0) {
+                addLog(`[!] TEMPO ESGOTADO! ${hostname} DETECTOU A INVASÃO!`, "error");
+                disconnectRemote(true);
+            }
+        }, 1000);
     };
 
     const processLocalCommand = async (input) => {
@@ -350,10 +467,11 @@ const Dashboard = ({ user, setUser, onLogout }) => {
         addLog(`SALVO: ${path}`, "system");
     };
 
-    const processCommand = async (input) => {
+    const processCommand = async (input, isRemote = false) => {
+        if (isRemote) return; // processRemoteCommand already handled it
         const [cmd, ...args] = input.trim().split(/\s+/);
         if (!cmd) return;
-        addLog(`operator@gridzero:~$ ${input}`, "command");
+        addLog(input, "command", { cwd: localCwd });
 
         if (await processAdminCommand(input)) return;
         if (await processLocalCommand(input)) return;
@@ -373,8 +491,45 @@ const Dashboard = ({ user, setUser, onLogout }) => {
                     break;
                 }
                 case 'scan': {
-                    const nodesRes = await globalThis.axios.get('/api/nodes');
-                    nodesRes.data.forEach(node => addLog(`NODE [${node.id}] - ${node.name} (DIFF: ${node.difficulty})`));
+                    if (args[0] === '-net') {
+                        const netRes = await globalThis.axios.get('/api/scan');
+                        if (netRes.data.targets && netRes.data.targets.length > 0) {
+                            addLog("[+] INICIANDO VARREDURA DE REDE...", "system");
+                            netRes.data.targets.forEach(t => {
+                                const vuln = t.ports.includes('OPEN');
+                                addLog(`[+] HOST: ${t.hostname.padEnd(22)} | IP: ${t.ip.padEnd(18)} | PORTAS: ${t.ports}`, vuln ? 'system' : 'normal');
+                                if (vuln) {
+                                    addLog(`[!] CONNECT: connect ${t.ip}  (janela: ${t.vulnerability_window})`, 'error');
+                                }
+                            });
+                        } else {
+                            addLog("[-] NENHUM ALVO VULNERÁVEL DETECTADO NA SUB-REDE.", "normal");
+                        }
+                    } else {
+                        const nodesRes = await globalThis.axios.get('/api/nodes');
+                        nodesRes.data.forEach(node => addLog(`NODE [${node.id}] - ${node.name} (DIFF: ${node.difficulty})`));
+                    }
+                    break;
+                }
+                case 'connect': {
+                    if (!args[0]) return addLog("ERRO: IP NECESSÁRIO. Uso: connect <ip>", "error");
+                    addLog(`[*] TENTANDO CONEXÃO COM ${args[0]}...`, "system");
+                    try {
+                        const res = await globalThis.axios.post('/api/connect', { ip: args[0] });
+                        const { hostname, ip, vfs } = res.data;
+                        setRemoteVfs(vfs);
+                        setRemoteHost({ hostname, ip });
+                        setRemoteCwd('/');
+                        setRemoteLogs([
+                            { text: `CONNECTED TO ${hostname} [${ip}]`, type: 'system' },
+                            { text: 'ROOT SHELL ESTABLISHED. 2:00 ANTES DO SISTEMA DETECTAR.', type: 'system' },
+                            { text: 'USE "exit" PARA SAIR SEM REPRESALIAS.', type: 'error' },
+                        ]);
+                        addLog(`[+] ACESSO CONCEDIDO: ${hostname} (${ip}). TERMINAL ABERTO.`, "system");
+                        startSessionTimer(hostname);
+                    } catch (err) {
+                        addLog(`[!] FALHA: ${err.response?.data?.message || 'CONEXÃO RECUSADA'}`, "error");
+                    }
                     break;
                 }
                 case 'hack':
@@ -386,10 +541,60 @@ const Dashboard = ({ user, setUser, onLogout }) => {
                     addLog(`SUCESSO: ${actionRes.data.message}`);
                     break;
                 }
-                case 'wallet': addLog(`CRÉDITOS: ${user.stats?.credits || 0} CR`); break;
+                case 'wallet': {
+                    const bal = user.stats?.credits || 0;
+                    const addr = `GZC_${btoa(user.username || 'op').replace(/=/g, '').substring(0, 16).toUpperCase()}`;
+                    const brl = (bal * 0.0024).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+                    addLog('┌─────────────────────────────────────────┐', 'system');
+                    addLog('│         ◈  GRIDZERO COIN WALLET  ◈       │', 'system');
+                    addLog('├─────────────────────────────────────────┤', 'system');
+                    addLog(`│  Endereço : ${addr.padEnd(28)}│`, 'system');
+                    addLog(`│  Saldo    : ${String(bal + ' GZC').padEnd(28)}│`, 'system');
+                    addLog(`│  Valor    : ~R$ ${String(brl).padEnd(24)}│`, 'system');
+                    addLog('└─────────────────────────────────────────┘', 'system');
+                    break;
+                }
+
+                case 'shop': {
+                    const sub = args[0]?.toLowerCase();
+                    if (!sub || sub === 'list') {
+                        // Display catalog
+                        const res = await globalThis.axios.get('/api/shop');
+                        addLog('--- GRIDZERO MARKET ---', 'system');
+                        res.data.catalog.forEach(item => {
+                            const owned = (user.stats?.inventory || []).includes(item.id);
+                            addLog(`[${item.id.padEnd(10)}] ${item.name.padEnd(22)} | ${String(item.price).padStart(4)} CR | ${owned ? '[INSTALADO]' : item.description}`, owned ? 'normal' : 'system');
+                        });
+                        addLog("USO: shop buy <id> | shop use <id> [target] | shop inventory", 'normal');
+                    } else if (sub === 'buy') {
+                        if (!args[1]) return addLog('USO: shop buy <program_id>', 'error');
+                        const res = await globalThis.axios.post('/api/shop/buy', { program_id: args[1] });
+                        addLog(`[+] ${res.data.message}`, 'system');
+                        addLog(`[*] SALDO RESTANTE: ${res.data.credits} CR`, 'normal');
+                        setUser(prev => ({ ...prev, stats: { ...prev.stats, credits: res.data.credits, inventory: res.data.inventory } }));
+                    } else if (sub === 'inventory') {
+                        const inv = user.stats?.inventory || [];
+                        if (inv.length === 0) return addLog('NENHUM PROGRAMA INSTALADO.', 'normal');
+                        addLog('--- PROGRAMAS INSTALADOS ---', 'system');
+                        inv.forEach(id => addLog(`  > ${id}`, 'system'));
+                    } else if (sub === 'use') {
+                        if (!args[1]) return addLog('USO: shop use <program_id> [target]', 'error');
+                        const res = await globalThis.axios.post('/api/shop/use', { program_id: args[1], target: args[2] || null });
+                        addLog(`[+] ${res.data.message}`, 'system');
+                        if (res.data.your_credits !== undefined) {
+                            addLog(`[*] SEU SALDO: ${res.data.your_credits} CR`, 'system');
+                            setUser(prev => ({ ...prev, stats: { ...prev.stats, credits: res.data.your_credits } }));
+                        }
+                    } else {
+                        addLog(`shop: subcomando desconhecido: ${sub}`, 'error');
+                    }
+                    break;
+                }
                 case 'clear': setLogs([]); break;
+                case 'disconnect': disconnectRemote(false); break;
                 case 'help':
-                    addLog("SISTEMA: status, scan, hack [id], probe [id], wallet, clear, help");
+                    addLog("SISTEMA: status, scan [-net], connect [ip], disconnect, hack [id], probe [id], wallet, shop, clear, logout");
+                    addLog("LOJA:    shop | shop buy <id> | shop use <id> [target] | shop inventory");
                     addLog("ARQUIVOS: ls, cd, pwd, cat, mkdir, rmdir, rm, nano, tree, whoami");
                     if (user.role === 'admin') addLog("ADMIN (SUDO): sudo users, sudo info [user], sudo impersonate [user]");
                     addLog("REMOTO: ls, cd, cp, help");
@@ -399,6 +604,53 @@ const Dashboard = ({ user, setUser, onLogout }) => {
         } catch (error) {
             addLog(`ERRO: ${error.response?.data?.message || "CONEXÃO FALHOU"}`, "error");
         }
+    };
+
+    const getCandidates = () => {
+        const localVFS = getLocalVFS();
+        const systemCmds = ['status', 'scan', 'connect', 'disconnect', 'hack', 'probe', 'wallet', 'shop', 'clear', 'logout', 'help', 'ls', 'cd', 'pwd', 'cat', 'mkdir', 'rmdir', 'nano', 'tree', 'whoami'];
+        if (user.role === 'admin') systemCmds.push('sudo');
+
+        const currentDir = localVFS[localCwd];
+        const files = currentDir ? currentDir.children : [];
+
+        // If sudo is typed, we might want to suggest subcommands
+        const adminSubCmds = user.role === 'admin' ? ['users', 'info', 'impersonate'] : [];
+
+        return { system: systemCmds, files, admin: adminSubCmds };
+    };
+
+    const handleNpcAttackComplete = (xpLost, deletedFile) => {
+        // 1. Delete the file from local VFS
+        const localVFS = getLocalVFS();
+        const filePath = `/home/operator/${deletedFile}`;
+        if (localVFS[filePath]) {
+            const newVFS = { ...localVFS };
+            delete newVFS[filePath];
+            newVFS['/home/operator'] = {
+                ...newVFS['/home/operator'],
+                children: newVFS['/home/operator'].children.filter(f => f !== deletedFile),
+            };
+            saveLocalVFS(newVFS);
+        }
+
+        // 2. Reduce XP in stats
+        const currentXp = user.stats?.xp ?? 0;
+        const newXp = Math.max(0, currentXp - xpLost);
+        const updatedStats = { ...user.stats, xp: newXp };
+        globalThis.axios.post('/api/user/update-stats', { stats: updatedStats }).catch(() => { });
+        setUser(prev => ({ ...prev, stats: updatedStats }));
+
+        // 3. Show notification and clear overlay
+        setNpcAttack(null);
+        setAttackNotif({ xpLost, file: deletedFile, attacker: npcAttack?.attacker?.username });
+
+        // 4. Log to main terminal
+        addLog(`[!] ATAQUE CONCLU\u00cdDO: ${npcAttack?.attacker?.username} SAIU DO SEU SISTEMA.`, 'error');
+        addLog(`[!] ARQUIVO DELETADO: ${deletedFile} | XP PERDIDO: ${xpLost}`, 'error');
+
+        // Auto-dismiss notification after 8s
+        setTimeout(() => setAttackNotif(null), 8000);
     };
 
     return (
@@ -411,14 +663,26 @@ const Dashboard = ({ user, setUser, onLogout }) => {
                     <span>SECURE_TERMINAL_V1.1 | CWD: {localCwd}</span>
                 </div>
 
-                <Console logs={logs} onCommand={processCommand} />
+                <Console
+                    logs={logs}
+                    onCommand={npcAttack ? () => { } : processCommand}
+                    candidates={getCandidates()}
+                    cwd={localCwd}
+                    disabled={!!npcAttack}
+                />
 
-                {user.pending_action && (
+                {(user.pending_action || remoteHost) && (
                     <RemoteTerminal
-                        node={{ id: user.pending_action.node_id, name: `TARGET_${user.pending_action.node_id}` }}
-                        action={user.pending_action}
+                        node={remoteHost
+                            ? { id: remoteHost.ip, name: remoteHost.hostname }
+                            : { id: user.pending_action?.node_id, name: `TARGET_${user.pending_action?.node_id}` }
+                        }
+                        action={user.pending_action || { type: 'connect' }}
                         logs={remoteLogs}
                         onCommand={processRemoteCommand}
+                        candidates={{ system: ['ls', 'cd', 'cat', 'cp', 'exit', 'help'], files: (remoteVfs || VFS_DATA[user.pending_action?.node_id])?.[remoteCwd]?.children || [] }}
+                        cwd={remoteCwd}
+                        sessionTimeLeft={sessionTimeLeft}
                     />
                 )}
 
@@ -437,6 +701,35 @@ const Dashboard = ({ user, setUser, onLogout }) => {
                 <span>SYSTEM_ROLE: {user.role}</span>
                 <span>RSA_4096_VALID</span>
             </footer>
+
+            {/* NPC Attack Overlay — blocks terminal for 30s */}
+            {npcAttack && (
+                <NpcAttackOverlay
+                    attacker={npcAttack.attacker}
+                    files={npcAttack.files}
+                    onComplete={handleNpcAttackComplete}
+                />
+            )}
+
+            {/* Post-attack notification toast */}
+            {attackNotif && (
+                <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[10000] w-[460px] border border-red-500 bg-black/95 shadow-[0_0_30px_rgba(255,0,0,0.5)] p-4 font-mono text-sm animate-fade-in-up">
+                    <div className="flex items-center justify-between mb-2">
+                        <span className="text-red-400 font-bold text-base animate-pulse">⚠ ATAQUE DE CPU DETECTADO</span>
+                        <button onClick={() => setAttackNotif(null)} className="text-red-400 hover:text-white">✕</button>
+                    </div>
+                    <div className="space-y-1 text-xs">
+                        <p className="text-orange-300">Invasor: <strong className="text-orange-400">{attackNotif.attacker}</strong></p>
+                        <p className="text-red-300">Arquivo deletado: <strong className="text-red-400">{attackNotif.file}</strong></p>
+                        <p className="text-red-300">XP perdido: <strong className="text-red-400">-{attackNotif.xpLost} XP</strong></p>
+                        <p className="text-yellow-400/70 mt-2 text-[10px]">Use <code>scan -net</code> para rastrear o invasor e contra-atacar.</p>
+                    </div>
+                    {/* Auto-dismiss bar */}
+                    <div className="mt-3 h-0.5 bg-red-900/40">
+                        <div className="h-full bg-red-500 animate-[shrink_8s_linear_forwards]" style={{ width: '100%' }} />
+                    </div>
+                </div>
+            )}
         </div>
     );
 };

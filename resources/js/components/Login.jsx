@@ -32,7 +32,14 @@ export default function Login({ onLogin }) {
             await globalThis.axios.get('/sanctum/csrf-cookie');
             const res = await globalThis.axios.post('/api/login', { username, password });
             setStatus('ACESSO CONCEDIDO. INICIALIZANDO SESSÃO...');
-            setTimeout(() => onLogin(res.data.user), 800);
+
+            if (res.data.user.role === 'admin') {
+                setTimeout(() => {
+                    window.location.href = '/admin';
+                }, 800);
+            } else {
+                setTimeout(() => onLogin(res.data.user), 800);
+            }
         } catch (err) {
             setLoading(false);
             setStatus('');

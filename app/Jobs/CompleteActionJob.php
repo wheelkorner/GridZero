@@ -3,6 +3,7 @@
 namespace App\Jobs;
 
 use App\Models\Action;
+use App\Models\User;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -14,7 +15,7 @@ class CompleteActionJob implements ShouldQueue
 {
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
-    protected $actionId;
+    protected int $actionId;
 
     /**
      * Create a new job instance.
@@ -29,6 +30,7 @@ class CompleteActionJob implements ShouldQueue
      */
     public function handle(): void
     {
+        /** @var Action|null $action */
         $action = Action::with(['user', 'node'])->find($this->actionId);
 
         if (!$action || $action->status !== 'pending') {
@@ -36,15 +38,20 @@ class CompleteActionJob implements ShouldQueue
         }
 
         $now = Carbon::now();
+        $endsAt = $action->ends_at;
 
         // Validação de tempo (margem de segurança de alguns segundos)
-        if ($now->lt($action->ends_at->subSeconds(2))) {
+        if ($endsAt instanceof Carbon && $now->lt($endsAt->subSeconds(2))) {
             return;
         }
 
+        /** @var User $user */
+        $user = $action->user;
+        $node = $action->node;
+
         // Lógica de Sucesso: Base 85% - (Dificuldade * 5%) + (Lvl * 2%)
-        $difficultyPenalty = ($action->node->difficulty ?? 1) * 5;
-        $levelBonus = $action->user->level * 2;
+        $difficultyPenalty = ($node ? $node->difficulty : 1) * 5;
+        $levelBonus = $user->level * 2;
         $successChance = 85 - $difficultyPenalty + $levelBonus;
 
         $isSuccess = rand(1, 100) <= max(10, min(95, $successChance));
@@ -52,20 +59,19 @@ class CompleteActionJob implements ShouldQueue
         if ($isSuccess) {
             $action->update(['status' => 'completed']);
 
-            $user = $action->user;
-            $node = $action->node;
-            $multiplier = $node->reward_multiplier ?? 1.0;
+            $multiplier = $node ? $node->reward_multiplier : 1.0;
 
             // Conceder Recompensas
+            /** @var array<string, mixed> $stats */
             $stats = $user->stats ?? [];
 
-            $gainedXP = round(100 * $multiplier);
-            $gainedCredits = round(50 * $multiplier);
+            $gainedXP = (int) round(100 * $multiplier);
+            $gainedCredits = (int) round(50 * $multiplier);
 
             $stats['xp'] = ($stats['xp'] ?? 0) + $gainedXP;
             $stats['credits'] = ($stats['credits'] ?? 0) + $gainedCredits;
 
-            $newLevel = floor($stats['xp'] / 1000) + 1;
+            $newLevel = (int) floor($stats['xp'] / 1000) + 1;
 
             // Hardware Scaling on Level Up
             $newCpu = $user->cpu;
@@ -87,7 +93,6 @@ class CompleteActionJob implements ShouldQueue
             $action->update(['status' => 'failed']);
 
             // SSD Damage on failure (-10%)
-            $user = $action->user;
             $newSsd = max(0, $user->ssd - 10);
             $user->update(['ssd' => $newSsd]);
         }

@@ -29,8 +29,20 @@ class UserController extends Controller
         $user = $request->user();
 
         // Merge with existing stats to prevent data loss
+        $incoming = $request->stats;
+
+        // Ensure credits is always a whole integer
+        if (isset($incoming['credits'])) {
+            $incoming['credits'] = (int) floor($incoming['credits']);
+        }
+
         $currentStats = $user->stats ?? [];
-        $user->stats = array_merge($currentStats, $request->stats);
+        $user->stats = array_merge($currentStats, $incoming);
+
+        // Also floor reputation_score if present
+        if (isset($user->reputation_score)) {
+            $user->reputation_score = (int) $user->reputation_score;
+        }
 
         $user->save();
 

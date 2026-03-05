@@ -2,6 +2,9 @@
 
 namespace App\Interfaces;
 
+/**
+ * @property int $id
+ */
 interface Interactable
 {
     /**

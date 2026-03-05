@@ -8,6 +8,7 @@ use App\Interfaces\Interactable;
 use Illuminate\Support\Facades\DB;
 use App\Jobs\CompleteActionJob;
 use Carbon\Carbon;
+use Illuminate\Database\Eloquent\Model;
 
 class ActionService
 {
@@ -23,6 +24,10 @@ class ActionService
         $now = Carbon::now();
         $lastUpdate = $user->last_energy_update ?? $user->created_at;
 
+        if (!$lastUpdate instanceof Carbon) {
+            $lastUpdate = Carbon::parse($lastUpdate);
+        }
+
         $diffInMinutes = $lastUpdate->diffInMinutes($now);
 
         // Se ainda não passou o tempo mínimo de regeneração, não faz nada
@@ -30,12 +35,12 @@ class ActionService
             return;
         }
 
-        $regenerationAmount = floor($diffInMinutes / self::REGEN_RATE_MINUTES) * self::ENERGY_PER_REGEN;
+        $regenerationAmount = (int) floor($diffInMinutes / self::REGEN_RATE_MINUTES) * self::ENERGY_PER_REGEN;
         $newEnergy = min(100, $user->energy_points + $regenerationAmount);
 
         // Ajusta o timestamp para o resto da divisão para não "perder" segundos na conta
         $minutesToSubtract = $diffInMinutes % self::REGEN_RATE_MINUTES;
-        $newLastUpdate = $now->subMinutes($minutesToSubtract);
+        $newLastUpdate = $now->copy()->subMinutes($minutesToSubtract);
 
         $user->update([
             'energy_points' => $newEnergy,
@@ -48,9 +53,10 @@ class ActionService
 
     /**
      * Inicia uma nova ação para o usuário vinculada a um alvo (Interactable).
-     * * @param User $user
+     * 
+     * @param User $user
      * @param string $type
-     * @param Interactable $target (Node, Npc, etc)
+     * @param Interactable&Model $target (Node, Npc, etc)
      * @return Action
      */
     public function startAction(User $user, string $type, Interactable $target): Action
@@ -71,13 +77,20 @@ class ActionService
             // 3. Execução
             $user->decrement('energy_points', self::ACTION_ENERGY_COST);
 
+            // Contador de vulnerabilidade (Counter-Hacking)
+            // O atacante fica vulnerável por 60 segundos ao iniciar qualquer ação
+            $user->update([
+                'vulnerable_until' => Carbon::now()->addSeconds(60)
+            ]);
+
             // Usa a interface para obter a dificuldade dinamicamente
             $durationSeconds = $target->getDifficulty() * 120;
             $endsAt = Carbon::now()->addSeconds($durationSeconds);
 
+            /** @var Model&Interactable $target */
             $action = $user->actions()->create([
                 'interactable_type' => get_class($target), // Armazena o namespace completo do Model
-                'interactable_id' => $target->id,
+                'interactable_id' => $target->getKey(),
                 'type' => $type,
                 'status' => 'pending',
                 'started_at' => Carbon::now(),
