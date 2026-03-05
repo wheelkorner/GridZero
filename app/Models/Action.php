@@ -32,4 +32,14 @@ class Action extends Model
     {
         return $this->belongsTo(Node::class);
     }
+
+    public function interactable()
+    {
+        return $this->morphTo();
+    }
+
+    public function interactable()
+    {
+        return $this->morphTo();
+    }
 }

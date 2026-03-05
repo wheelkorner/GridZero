@@ -11,12 +11,15 @@ return new class extends Migration {
             $table->id();
             $table->foreignId('user_id')->constrained()->onDelete('cascade');
             $table->foreignId('node_id')->constrained()->onDelete('cascade');
+            $table->string('interactable_type')->nullable(); // Ex: 'App\Models\Node' ou 'App\Models\Npc'
+            $table->unsignedBigInteger('interactable_id')->nullable();
             $table->string('type');
             $table->string('status');
             $table->timestamp('started_at')->nullable();
             $table->timestamp('ends_at')->nullable();
             $table->index(['user_id', 'ends_at']);
             $table->timestamps();
+            $table->index(['interactable_type', 'interactable_id']);
         });
     }
 

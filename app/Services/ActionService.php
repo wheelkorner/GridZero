@@ -4,10 +4,9 @@ namespace App\Services;
 
 use App\Models\User;
 use App\Models\Action;
-use App\Models\Node;
+use App\Interfaces\Interactable;
 use Illuminate\Support\Facades\DB;
 use App\Jobs\CompleteActionJob;
-
 use Carbon\Carbon;
 
 class ActionService
@@ -26,27 +25,37 @@ class ActionService
 
         $diffInMinutes = $lastUpdate->diffInMinutes($now);
 
-        if ($diffInMinutes >= self::REGEN_RATE_MINUTES) {
-            $regenerationAmount = floor($diffInMinutes / self::REGEN_RATE_MINUTES) * self::ENERGY_PER_REGEN;
-
-            $newEnergy = min(100, $user->energy_points + $regenerationAmount);
-
-            $minutesToSubtract = $diffInMinutes % self::REGEN_RATE_MINUTES;
-            $newLastUpdate = $now->subMinutes($minutesToSubtract);
-
-            $user->update([
-                'energy_points' => $newEnergy,
-                'last_energy_update' => $newLastUpdate,
-            ]);
+        // Se ainda não passou o tempo mínimo de regeneração, não faz nada
+        if ($diffInMinutes < self::REGEN_RATE_MINUTES) {
+            return;
         }
+
+        $regenerationAmount = floor($diffInMinutes / self::REGEN_RATE_MINUTES) * self::ENERGY_PER_REGEN;
+        $newEnergy = min(100, $user->energy_points + $regenerationAmount);
+
+        // Ajusta o timestamp para o resto da divisão para não "perder" segundos na conta
+        $minutesToSubtract = $diffInMinutes % self::REGEN_RATE_MINUTES;
+        $newLastUpdate = $now->subMinutes($minutesToSubtract);
+
+        $user->update([
+            'energy_points' => $newEnergy,
+            'last_energy_update' => $newLastUpdate,
+        ]);
+
+        // Recarrega o objeto para garantir que os valores na memória estejam frescos
+        $user->refresh();
     }
 
     /**
-     * Inicia uma nova ação para o usuário vinculada a um nó.
+     * Inicia uma nova ação para o usuário vinculada a um alvo (Interactable).
+     * * @param User $user
+     * @param string $type
+     * @param Interactable $target (Node, Npc, etc)
+     * @return Action
      */
-    public function startAction(User $user, string $type, int $nodeId): Action
+    public function startAction(User $user, string $type, Interactable $target): Action
     {
-        return DB::transaction(function () use ($user, $type, $nodeId) {
+        return DB::transaction(function () use ($user, $type, $target) {
             // 1. Atualiza energia antes de validar
             $this->calculateEnergy($user);
 
@@ -55,33 +64,27 @@ class ActionService
                 throw new \Exception("Energia insuficiente.");
             }
 
-            $hasPendingAction = $user->actions()
-                ->where('status', 'pending')
-                ->exists();
-
-            if ($hasPendingAction) {
-                throw new \Exception("Já existe uma ação pendente ativa.");
+            if ($user->actions()->where('status', 'pending')->exists()) {
+                throw new \Exception("Já existe uma ação pendente.");
             }
-
-            $node = Node::findOrFail($nodeId);
 
             // 3. Execução
             $user->decrement('energy_points', self::ACTION_ENERGY_COST);
 
-            // Duração baseada na dificuldade: cada nível = 2 minutos
-            // Para testes rápidos, poderíamos usar segundos, mas vamos seguir a lógica de minutos.
-            $durationSeconds = $node->difficulty * 120;
+            // Usa a interface para obter a dificuldade dinamicamente
+            $durationSeconds = $target->getDifficulty() * 120;
             $endsAt = Carbon::now()->addSeconds($durationSeconds);
 
             $action = $user->actions()->create([
-                'node_id' => $node->id,
+                'interactable_type' => get_class($target), // Armazena o namespace completo do Model
+                'interactable_id' => $target->id,
                 'type' => $type,
                 'status' => 'pending',
                 'started_at' => Carbon::now(),
                 'ends_at' => $endsAt,
             ]);
 
-            // Despacha o Job para completar a ação de forma assíncrona
+            // Despacha o Job
             CompleteActionJob::dispatch($action->id)->delay($endsAt);
 
             return $action;
