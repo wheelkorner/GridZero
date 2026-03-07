@@ -4,7 +4,13 @@
 
 @section('content_header')
 <div class="d-flex justify-content-between align-items-center">
-    <h1><i class="{{ $user->is_npc ? 'fas fa-robot' : 'fas fa-user' }}"></i> {{ $user->username }}</h1>
+    <h1>
+        <i class="{{ $user->is_npc ? 'fas fa-robot' : 'fas fa-user' }}"></i>
+        @if($user->is_npc && $user->level >= 100)
+            <i class="fas fa-crown text-warning" title="Operador Elite"></i>
+        @endif
+        {{ $user->username }}
+    </h1>
     <div>
         <a href="{{ route('admin.users.edit', $user->id) }}" class="btn btn-warning btn-sm">
             <i class="fas fa-edit"></i> Editar
@@ -34,7 +40,12 @@
                     <i
                         class="fas {{ $user->is_npc ? 'fa-robot' : 'fa-user-secret' }} fa-5x text-{{ $user->is_npc ? 'muted' : 'primary' }}"></i>
                 </div>
-                <h3 class="mb-0">{{ $user->username }}</h3>
+                <h3 class="mb-0">
+                    @if($user->is_npc && $user->level >= 100)
+                        <i class="fas fa-crown text-warning"></i>
+                    @endif
+                    {{ $user->username }}
+                </h3>
                 <p>
                     <span
                         class="badge badge-{{ $user->role === 'admin' ? 'danger' : ($user->is_npc ? 'secondary' : 'success') }}">
@@ -88,7 +99,7 @@
             <div class="card-body p-0">
                 <table class="table table-sm mb-0">
                     <tr>
-                        <th width="200">Email</th>
+                        <th style="width: 200px">Email</th>
                         <td>{{ $user->email ?? '—' }}</td>
                     </tr>
                     <tr>
@@ -127,7 +138,7 @@
             <div class="card-body p-0">
                 <table class="table table-sm mb-0">
                     <tr>
-                        <th width="200">Créditos</th>
+                        <th style="width: 200px">Créditos</th>
                         <td>{{ $user->stats['credits'] ?? 0 }} CR</td>
                     </tr>
                     <tr>
@@ -162,6 +173,26 @@
             </div>
         </div>
 
+        {{-- Virtual File System (VFS) --}}
+        <div class="card card-dark mt-3">
+            <div class="card-header">
+                <h4 class="card-title">Virtual File System (VFS)</h4>
+                <div class="card-tools">
+                    <button type="button" class="btn btn-tool" data-card-widget="collapse">
+                        <i class="fas fa-minus"></i>
+                    </button>
+                </div>
+            </div>
+            <div class="card-body bg-black text-green p-3"
+                style="min-height: 200px; max-height: 400px; overflow-y: auto;">
+                @if(isset($user->stats['vfs']) && is_array($user->stats['vfs']) && count($user->stats['vfs']) > 0)
+                    @include('admin.users.partials.vfs_tree', ['path' => '/', 'vfs' => $user->stats['vfs']])
+                @else
+                    <em class="text-muted">Nenhum sistema de arquivos detectado.</em>
+                @endif
+            </div>
+        </div>
+
         {{-- Quick actions --}}
         <div class="card card-dark mt-3">
             <div class="card-header">
@@ -182,4 +213,27 @@
 
 @section('css')
 <link rel="stylesheet" href="/css/admin_custom.css">
+<style>
+    .bg-black {
+        background-color: #0c0c0c !important;
+    }
+
+    .text-green {
+        color: #39ff14 !important;
+    }
+
+    .vfs-dir {
+        color: #ffc107;
+        margin-bottom: 2px;
+    }
+
+    .vfs-file {
+        color: #39ff14;
+        margin-bottom: 2px;
+    }
+
+    .vfs-dir strong {
+        color: #ffc107;
+    }
+</style>
 @stop

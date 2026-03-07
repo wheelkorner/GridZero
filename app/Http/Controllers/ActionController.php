@@ -90,6 +90,7 @@ class ActionController extends Controller
             'hostname' => $target->username,
             'level' => $target->level,
             'ip' => $target->last_seen_ip,
+            'vulnerable_until' => $target->vulnerable_until,
             'vfs' => $vfs,
         ]);
     }
@@ -99,26 +100,6 @@ class ActionController extends Controller
      */
     private function generateNpcVfs(\App\Models\User $npc): array
     {
-        $u = $npc->username;
-        $lvl = $npc->level;
-
-        return [
-            '/' => ['type' => 'dir', 'children' => ['home', 'etc', 'logs', 'root']],
-            '/root' => ['type' => 'dir', 'children' => ['tools', 'credentials.db']],
-            '/root/tools' => ['type' => 'dir', 'children' => ['exploit.sh', 'scanner.py']],
-            '/root/credentials.db' => ['type' => 'file', 'content' => "USER={$u}\nLEVEL={$lvl}\nKEY=" . strtoupper(substr(md5($u), 0, 16))],
-            '/root/tools/exploit.sh' => ['type' => 'file', 'content' => "#!/bin/bash\n# {$u} exploit framework v{$lvl}\necho \"Bypass sequence initiated...\""],
-            '/root/tools/scanner.py' => ['type' => 'file', 'content' => "# {$u} net scanner\nimport socket\nfor p in range(1,1024): pass"],
-            '/home' => ['type' => 'dir', 'children' => [$u]],
-            "/home/{$u}" => ['type' => 'dir', 'children' => ['notes.txt', 'loot']],
-            "/home/{$u}/loot" => ['type' => 'dir', 'children' => ['data.bin']],
-            "/home/{$u}/notes.txt" => ['type' => 'file', 'content' => "Target acquired. Grid sector: {$lvl}X.\nEvade detection. Leave no trace."],
-            "/home/{$u}/loot/data.bin" => ['type' => 'file', 'content' => 'ENCRYPTED_PAYLOAD::' . strtoupper(md5($u . $lvl))],
-            '/etc' => ['type' => 'dir', 'children' => ['shadow', 'hostname']],
-            '/etc/shadow' => ['type' => 'file', 'content' => "{$u}:\$6\$" . substr(md5($u), 0, 8) . ":\$encrypted_hash"],
-            '/etc/hostname' => ['type' => 'file', 'content' => "{$u}-node.gridzero.net"],
-            '/logs' => ['type' => 'dir', 'children' => ['access.log']],
-            '/logs/access.log' => ['type' => 'file', 'content' => "[BREACH_DETECTED] Unauthorized access via counter-hack protocol."],
-        ];
+        return $npc->generateVfs();
     }
 }

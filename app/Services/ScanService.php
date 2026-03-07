@@ -20,7 +20,9 @@ class ScanService
                 // Online nos últimos 5 minutos
                 $query->where('last_seen_at', '>', Carbon::now()->subMinutes(5))
                     // Ou vulnerável (Counter-Hacking ativo)
-                    ->orWhere('vulnerable_until', '>', Carbon::now());
+                    ->orWhere('vulnerable_until', '>', Carbon::now())
+                    // Ou se for um NPC (sempre online)
+                    ->orWhere('is_npc', true);
             })
             ->where('id', '!=', auth()->id()) // Não escaneia a si mesmo
             ->get()

@@ -8,45 +8,49 @@ use Illuminate\Console\Command;
 
 class SimulateNpcActivity extends Command
 {
-    protected $signature = 'npc:simulate';
-    protected $description = 'Simulates NPC online activity: randomizes vulnerability windows and last_seen_at.';
-
-    // Percentage of NPCs that will be "hacking" (vulnerable) at any given tick
-    protected const HACK_PROBABILITY = 0.40; // 40% chance each NPC is mid-hack
-
-    // Vulnerability window range in seconds
-    protected const MIN_VULN_SECONDS = 20;
-    protected const MAX_VULN_SECONDS = 120;
+    protected $signature = 'npc:simulate {--loop : Run in an infinite loop for development}';
+    protected $description = 'Simulates NPC online activity with variability (Active, Scanning, Idle) and growth.';
 
     public function handle(): void
     {
-        $npcs = User::where('is_npc', true)->get();
+        $this->info("NPC simulation started.");
 
-        foreach ($npcs as $npc) {
-            $isHacking = (mt_rand(1, 100) / 100) <= self::HACK_PROBABILITY;
+        do {
+            $npcs = User::where('is_npc', true)->get();
+            $now = Carbon::now();
 
-            // Always mark NPCs as recently "seen" (online)
-            $lastSeen = Carbon::now()->subSeconds(mt_rand(0, 60));
+            foreach ($npcs as $npc) {
+                $roll = mt_rand(1, 100);
 
-            if ($isHacking) {
-                // Random vulnerability window between MIN and MAX
-                $vulnSeconds = mt_rand(self::MIN_VULN_SECONDS, self::MAX_VULN_SECONDS);
-                $vulnerableUntil = Carbon::now()->addSeconds($vulnSeconds);
+                // 10% chance to level up if they were "active" (simulated growth)
+                if ($roll > 90 && $npc->level < 100) {
+                    $npc->increment('level');
+                }
 
-                $npc->update([
-                    'last_seen_at' => $lastSeen,
-                    'vulnerable_until' => $vulnerableUntil,
-                ]);
-            } else {
-                // NPC is idle/safe — clear any expired window
-                $npc->update([
-                    'last_seen_at' => $lastSeen,
-                    'vulnerable_until' => null,
-                ]);
+                // Randomize State
+                if ($roll <= 30) { // 30% Active / Attacking
+                    $npc->update([
+                        'last_seen_at' => $now,
+                        'vulnerable_until' => $now->copy()->addSeconds(mt_rand(60, 300)),
+                    ]);
+                } elseif ($roll <= 60) { // 30% Scanning / Short Window
+                    $npc->update([
+                        'last_seen_at' => $now,
+                        'vulnerable_until' => $now->copy()->addSeconds(mt_rand(10, 30)),
+                    ]);
+                } else { // 40% Idle / Safe
+                    $npc->update([
+                        'last_seen_at' => $now,
+                        'vulnerable_until' => null,
+                    ]);
+                }
             }
-        }
 
-        $count = $npcs->count();
-        $this->info("NPC simulation tick: {$count} NPCs updated.");
+            $this->info($now->format('H:i:s') . " - NPC tick: {$npcs->count()} NPCs updated with variable states.");
+
+            if ($this->option('loop')) {
+                sleep(30); // Run every 30s in loop mode
+            }
+        } while ($this->option('loop'));
     }
 }

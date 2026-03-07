@@ -15,7 +15,7 @@ class UserSeeder extends Seeder
     {
         // Standard Operator
         User::create([
-            'username' => 'operator',
+            'username' => 'DanteKollrossRincon',
             'password' => Hash::make('password'),
             'energy_points' => 100,
             'level' => 1,
@@ -35,7 +35,7 @@ class UserSeeder extends Seeder
 
         // Second Operator (for testing)
         User::create([
-            'username' => 'operator2',
+            'username' => 'MiguelRamosRincon',
             'password' => Hash::make('password'),
             'energy_points' => 100,
             'level' => 2,

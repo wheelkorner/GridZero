@@ -38,6 +38,9 @@
                                     @else
                                         <i class="fas fa-user text-primary" title="Jogador Real"></i>
                                     @endif
+                                    @if($user->is_npc && $user->level >= 100)
+                                        <i class="fas fa-crown text-warning" title="Operador Elite"></i>
+                                    @endif
                                     {{ $user->username }}
                                     @if($user->is_npc)
                                         <span class="badge badge-secondary ml-1" style="font-size: 0.65rem;">NPC</span>

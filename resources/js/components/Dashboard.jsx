@@ -105,6 +105,7 @@ const Dashboard = ({ user, setUser, onLogout }) => {
                         setUser(prev => ({ ...prev, pending_action: null }));
                         setRemoteLogs([]);
                         setRemoteCwd('/');
+                        setSessionTimeLeft(null);
                         addLog("SISTEMA: AÇÃO CONCLUÍDA. CONEXÃO REMOTA ENCERRADA.", "system");
                     }
                 }
@@ -232,8 +233,30 @@ const Dashboard = ({ user, setUser, onLogout }) => {
                 }
                 break;
             }
+            case 'tree': {
+                const startPath = args[0] || remoteCwd;
+                const path = startPath.startsWith('/') ? startPath : (remoteCwd === '/' ? `/${startPath}` : `${remoteCwd}/${startPath}`);
+                if (!vfs[path]) return addRemoteLog(`tree: ${startPath}: No such directory`, "error");
+                addRemoteLog(`VFS STRUCTURE: ${path}`);
+                const buildTree = (currentPath, prefix = "") => {
+                    const node = vfs[currentPath];
+                    if (!node || node.type !== 'dir') return;
+                    node.children.forEach((childName, index) => {
+                        const isLast = index === node.children.length - 1;
+                        const childPath = currentPath === '/' ? `/${childName}` : `${currentPath}/${childName}`;
+                        const connector = isLast ? "└── " : "├── ";
+                        addRemoteLog(`${prefix}${connector}${childName}`);
+                        if (vfs[childPath]?.type === 'dir') {
+                            const newPrefix = prefix + (isLast ? "    " : "│   ");
+                            buildTree(childPath, newPrefix);
+                        }
+                    });
+                };
+                buildTree(path);
+                break;
+            }
             case 'help':
-                addRemoteLog("AVAILABLE: ls, cd, cat [file], cp [file], exit, help");
+                addRemoteLog("AVAILABLE: ls, cd, cat [file], cp [file], tree, exit, help");
                 break;
             case 'exit':
                 disconnectRemote(false);
@@ -244,12 +267,6 @@ const Dashboard = ({ user, setUser, onLogout }) => {
     };
 
     // ---- Clean/forced disconnect helpers --------------------------------
-    const stopSessionTimer = () => {
-        if (sessionTimerRef.current) {
-            clearInterval(sessionTimerRef.current);
-            sessionTimerRef.current = null;
-        }
-    };
 
     const disconnectRemote = (retaliate = false) => {
         stopSessionTimer();
@@ -279,24 +296,52 @@ const Dashboard = ({ user, setUser, onLogout }) => {
         }
     };
 
-    // Start the 2-minute session countdown when connecting to an NPC
-    const startSessionTimer = (hostname) => {
-        const SESSION_SECONDS = 120;
-        setSessionTimeLeft(SESSION_SECONDS);
+    // Dedicated Effect for Session Timer (Hacks and IP Connections)
+    useEffect(() => {
         stopSessionTimer();
 
-        let remaining = SESSION_SECONDS;
-        sessionTimerRef.current = setInterval(() => {
-            remaining -= 1;
+        if (!user.pending_action && !remoteHost) {
+            setSessionTimeLeft(null);
+            return;
+        }
+
+        const tick = () => {
+            const now = new Date().getTime();
+            let remaining = 0;
+
+            if (user.pending_action) {
+                const end = new Date(user.pending_action.ends_at).getTime();
+                remaining = Math.max(0, Math.floor((end - now) / 1000));
+            } else if (remoteHost && remoteHost.vulnerable_until) {
+                const end = new Date(remoteHost.vulnerable_until).getTime();
+                remaining = Math.max(0, Math.floor((end - now) / 1000));
+            }
+
             setSessionTimeLeft(remaining);
-            if (remaining <= 30 && remaining > 0 && remaining % 10 === 0) {
-                addRemoteLog(`[!] AVISO: ${remaining}s ATÉ EXPULSÃO DO SISTEMA.`, 'error');
-            }
+
+
             if (remaining <= 0) {
-                addLog(`[!] TEMPO ESGOTADO! ${hostname} DETECTOU A INVASÃO!`, "error");
-                disconnectRemote(true);
+                if (remoteHost) {
+                    addLog(`[!] TEMPO ESGOTADO! ${remoteHost.hostname} DETECTOU A INVASÃO!`, "error");
+                    disconnectRemote(true);
+                } else {
+                    // For hacks, we wait for refreshUser to conclude it properly
+                    setSessionTimeLeft(0);
+                }
             }
-        }, 1000);
+        };
+
+        tick(); // Initial call
+        sessionTimerRef.current = setInterval(tick, 1000);
+
+        return () => stopSessionTimer();
+    }, [user.pending_action?.id, remoteHost?.ip]);
+
+    const stopSessionTimer = () => {
+        if (sessionTimerRef.current) {
+            clearInterval(sessionTimerRef.current);
+            sessionTimerRef.current = null;
+        }
     };
 
     const processLocalCommand = async (input) => {
@@ -483,7 +528,7 @@ const Dashboard = ({ user, setUser, onLogout }) => {
                     const userRes = await globalThis.axios.get('/api/user');
                     setUser(userRes.data);
                     const u = userRes.data;
-                    const formatCpu = (m), formatRam = (mb) => mb >= 1024 ? `${(mb / 1024).toFixed(1)} GB` : `${mb} MB`;
+                    const formatRam = (mb) => mb >= 1024 ? `${(mb / 1024).toFixed(1)} GB` : `${mb} MB`;
                     const formatCpuStr = (mhz) => mhz >= 1000 ? `${(mhz / 1000).toFixed(1)} GHz` : `${mhz} MHz`;
                     addLog(`USUÁRIO: ${u.username} | NÍVEL: ${u.level} ${u.role === 'admin' ? '[ROOT]' : ''}`);
                     addLog(`HARDWARE: [ CPU: ${formatCpuStr(u.cpu)} ] [ RAM: ${formatRam(u.ram)} ] [ SSD: ${u.ssd}% ]`);
@@ -516,17 +561,16 @@ const Dashboard = ({ user, setUser, onLogout }) => {
                     addLog(`[*] TENTANDO CONEXÃO COM ${args[0]}...`, "system");
                     try {
                         const res = await globalThis.axios.post('/api/connect', { ip: args[0] });
-                        const { hostname, ip, vfs } = res.data;
+                        const { hostname, ip, vfs, vulnerable_until } = res.data;
                         setRemoteVfs(vfs);
-                        setRemoteHost({ hostname, ip });
+                        setRemoteHost({ hostname, ip, vulnerable_until });
                         setRemoteCwd('/');
                         setRemoteLogs([
                             { text: `CONNECTED TO ${hostname} [${ip}]`, type: 'system' },
-                            { text: 'ROOT SHELL ESTABLISHED. 2:00 ANTES DO SISTEMA DETECTAR.', type: 'system' },
+                            { text: 'ROOT SHELL ESTABLISHED. ACESSO LIMITADO.', type: 'system' },
                             { text: 'USE "exit" PARA SAIR SEM REPRESALIAS.', type: 'error' },
                         ]);
                         addLog(`[+] ACESSO CONCEDIDO: ${hostname} (${ip}). TERMINAL ABERTO.`, "system");
-                        startSessionTimer(hostname);
                     } catch (err) {
                         addLog(`[!] FALHA: ${err.response?.data?.message || 'CONEXÃO RECUSADA'}`, "error");
                     }
@@ -536,7 +580,8 @@ const Dashboard = ({ user, setUser, onLogout }) => {
                 case 'probe': {
                     if (!args[0]) return addLog(`ERRO: ID DO NODE NECESSÁRIO.`, "error");
                     const actionRes = await globalThis.axios.post('/api/actions', { type: cmd, node_id: args[0] });
-                    setUser(prev => ({ ...prev, ...actionRes.data.user, pending_action: actionRes.data.data }));
+                    const newPendingAction = actionRes.data.data;
+                    setUser(prev => ({ ...prev, ...actionRes.data.user, pending_action: newPendingAction }));
                     setRemoteLogs([{ text: `CONNECTING TO NODE ${args[0]}...`, type: "system" }]);
                     addLog(`SUCESSO: ${actionRes.data.message}`);
                     break;
@@ -680,7 +725,7 @@ const Dashboard = ({ user, setUser, onLogout }) => {
                         action={user.pending_action || { type: 'connect' }}
                         logs={remoteLogs}
                         onCommand={processRemoteCommand}
-                        candidates={{ system: ['ls', 'cd', 'cat', 'cp', 'exit', 'help'], files: (remoteVfs || VFS_DATA[user.pending_action?.node_id])?.[remoteCwd]?.children || [] }}
+                        candidates={{ system: ['ls', 'cd', 'cat', 'cp', 'tree', 'exit', 'help'], files: (remoteVfs || VFS_DATA[user.pending_action?.node_id])?.[remoteCwd]?.children || [] }}
                         cwd={remoteCwd}
                         sessionTimeLeft={sessionTimeLeft}
                     />
